@@ -107,6 +107,16 @@ async function run() {
     res.send(result);
   });
 
+  app.get("/rooms/latest", async (req, res) => {
+  const result = await roomsCollection
+    .find()
+    .sort({ _id: -1 })
+    .limit(6)
+    .toArray();
+
+  res.send(result);
+});
+
   // SINGLE ROOM
   app.get("/rooms/:id", async (req, res) => {
     const result = await roomsCollection.findOne({

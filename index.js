@@ -92,7 +92,7 @@ async function run() {
     res.clearCookie("token").send({ success: true });
   });
 
-  // ALL ROOMS + SEARCH
+  // ALL ROOMS
   app.get("/rooms", async (req, res) => {
     const search = req.query.search || "";
 
@@ -107,15 +107,16 @@ async function run() {
     res.send(result);
   });
 
+  // LATEST 6
   app.get("/rooms/latest", async (req, res) => {
-  const result = await roomsCollection
-    .find()
-    .sort({ _id: -1 })
-    .limit(6)
-    .toArray();
+    const result = await roomsCollection
+      .find()
+      .sort({ _id: -1 })
+      .limit(6)
+      .toArray();
 
-  res.send(result);
-});
+    res.send(result);
+  });
 
   // SINGLE ROOM
   app.get("/rooms/:id", async (req, res) => {
@@ -124,6 +125,15 @@ async function run() {
     });
 
     res.send(result);
+  });
+
+  // BOOKING COUNT
+  app.get("/rooms/:id/booking-count", async (req, res) => {
+    const count = await bookingsCollection.countDocuments({
+      roomId: req.params.id,
+    });
+
+    res.send({ count });
   });
 
   // ADD ROOM
@@ -144,8 +154,20 @@ async function run() {
     res.send(result);
   });
 
-  // UPDATE ROOM
+  // UPDATE ROOM OWNER CHECK
   app.patch("/rooms/:id", verifyToken, async (req, res) => {
+    const room = await roomsCollection.findOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    if (!room) {
+      return res.status(404).send({ message: "Room not found" });
+    }
+
+    if (room.ownerEmail !== req.user.email) {
+      return res.status(403).send({ message: "Forbidden" });
+    }
+
     const result = await roomsCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
       { $set: req.body }
@@ -154,8 +176,24 @@ async function run() {
     res.send(result);
   });
 
-  // DELETE ROOM
+  // DELETE ROOM OWNER CHECK
   app.delete("/rooms/:id", verifyToken, async (req, res) => {
+    const room = await roomsCollection.findOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    if (!room) {
+      return res.status(404).send({ message: "Room not found" });
+    }
+
+    if (room.ownerEmail !== req.user.email) {
+      return res.status(403).send({ message: "Forbidden" });
+    }
+
+    await bookingsCollection.deleteMany({
+      roomId: req.params.id,
+    });
+
     const result = await roomsCollection.deleteOne({
       _id: new ObjectId(req.params.id),
     });
@@ -181,7 +219,7 @@ async function run() {
     res.send(result);
   });
 
-  // CANCEL BOOKING
+  // CANCEL
   app.delete("/bookings/:id", verifyToken, async (req, res) => {
     const result = await bookingsCollection.deleteOne({
       _id: new ObjectId(req.params.id),

@@ -29,13 +29,20 @@ const client = new MongoClient(uri, {
   },
 });
 
+// =========================
+// 🔐 JWT MIDDLEWARE (EMAIL BASED)
+// =========================
 function verifyToken(req, res, next) {
   const token = req.cookies.token;
   if (!token) return res.status(401).send("Unauthorized");
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) return res.status(401).send("Unauthorized");
-    req.user = decoded;
+
+    req.user = {
+      email: decoded.email,
+    };
+
     next();
   });
 }
@@ -52,6 +59,9 @@ async function run() {
     res.send("StudyNook API Running");
   });
 
+  // =========================
+  // USERS
+  // =========================
   app.post("/users", async (req, res) => {
     const user = req.body;
 
@@ -62,9 +72,14 @@ async function run() {
     res.send(result);
   });
 
+  // =========================
+  // JWT (EMAIL BASED - SAFE)
+  // =========================
   app.post("/jwt", async (req, res) => {
+    const user = req.body;
+
     const token = jwt.sign(
-      { email: req.body.email },
+      { email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -72,6 +87,7 @@ async function run() {
     res.cookie("token", token, {
       httpOnly: true,
       secure: false,
+      sameSite: "strict",
     }).send({ success: true });
   });
 
@@ -79,16 +95,51 @@ async function run() {
     res.clearCookie("token").send({ success: true });
   });
 
+  // =========================
+  // 🔍 SEARCH + FILTER (7.2)
+  // =========================
   app.get("/rooms", async (req, res) => {
-    const search = req.query.search || "";
+    const {
+      search = "",
+      amenities,
+      minPrice,
+      maxPrice,
+      floor,
+    } = req.query;
 
-    const result = await roomsCollection.find({
-      roomName: { $regex: search, $options: "i" },
-    }).toArray();
+    let query = {};
 
+    // search by room name
+    if (search) {
+      query.roomName = { $regex: search, $options: "i" };
+    }
+
+    // amenities filter
+    if (amenities) {
+      query.amenities = {
+        $in: Array.isArray(amenities)
+          ? amenities
+          : amenities.split(","),
+      };
+    }
+
+    // price range
+    if (minPrice || maxPrice) {
+      query.hourlyRate = {};
+      if (minPrice) query.hourlyRate.$gte = Number(minPrice);
+      if (maxPrice) query.hourlyRate.$lte = Number(maxPrice);
+    }
+
+    // floor filter
+    if (floor) {
+  query.floor = { $eq: floor.toString() };
+}
+
+    const result = await roomsCollection.find(query).toArray();
     res.send(result);
   });
 
+  // latest rooms
   app.get("/rooms/latest", async (req, res) => {
     const result = await roomsCollection
       .find()
@@ -99,6 +150,7 @@ async function run() {
     res.send(result);
   });
 
+  // single room
   app.get("/rooms/:id", async (req, res) => {
     const result = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
@@ -107,8 +159,10 @@ async function run() {
     res.send(result);
   });
 
+  // create room
   app.post("/rooms", verifyToken, async (req, res) => {
     const room = req.body;
+
     room.ownerEmail = req.user.email;
     room.bookingCount = 0;
 
@@ -116,6 +170,7 @@ async function run() {
     res.send(result);
   });
 
+  // my listings
   app.get("/my-listings", verifyToken, async (req, res) => {
     const result = await roomsCollection
       .find({ ownerEmail: req.user.email })
@@ -124,6 +179,7 @@ async function run() {
     res.send(result);
   });
 
+  // update room
   app.patch("/rooms/:id", verifyToken, async (req, res) => {
     const room = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
@@ -141,6 +197,7 @@ async function run() {
     res.send(result);
   });
 
+  // delete room
   app.delete("/rooms/:id", verifyToken, async (req, res) => {
     const room = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
@@ -161,8 +218,10 @@ async function run() {
     res.send(result);
   });
 
+  // create booking
   app.post("/bookings", verifyToken, async (req, res) => {
     const booking = req.body;
+
     booking.userEmail = req.user.email;
     booking.status = "confirmed";
 
@@ -187,6 +246,7 @@ async function run() {
     res.send(result);
   });
 
+  // my bookings
   app.get("/bookings", verifyToken, async (req, res) => {
     const result = await bookingsCollection
       .find({ userEmail: req.user.email })
@@ -195,6 +255,7 @@ async function run() {
     res.send(result);
   });
 
+  // cancel booking
   app.patch("/bookings/:id/cancel", verifyToken, async (req, res) => {
     const booking = await bookingsCollection.findOne({
       _id: new ObjectId(req.params.id),

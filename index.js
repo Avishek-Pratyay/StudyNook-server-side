@@ -29,9 +29,7 @@ const client = new MongoClient(uri, {
   },
 });
 
-// =========================
-// 🔐 JWT MIDDLEWARE (EMAIL BASED)
-// =========================
+// JWT MIDDLEWARE
 function verifyToken(req, res, next) {
   const token = req.cookies.token;
   if (!token) return res.status(401).send("Unauthorized");
@@ -59,9 +57,7 @@ async function run() {
     res.send("StudyNook API Running");
   });
 
-  // =========================
   // USERS
-  // =========================
   app.post("/users", async (req, res) => {
     const user = req.body;
 
@@ -72,9 +68,7 @@ async function run() {
     res.send(result);
   });
 
-  // =========================
-  // JWT (EMAIL BASED - SAFE)
-  // =========================
+  // JWT
   app.post("/jwt", async (req, res) => {
     const user = req.body;
 
@@ -95,9 +89,7 @@ async function run() {
     res.clearCookie("token").send({ success: true });
   });
 
-  // =========================
-  // 🔍 SEARCH + FILTER (7.2)
-  // =========================
+  // SEARCH + FILTER
   app.get("/rooms", async (req, res) => {
     const {
       search = "",
@@ -109,12 +101,10 @@ async function run() {
 
     let query = {};
 
-    // search by room name
     if (search) {
       query.roomName = { $regex: search, $options: "i" };
     }
 
-    // amenities filter
     if (amenities) {
       query.amenities = {
         $in: Array.isArray(amenities)
@@ -123,17 +113,15 @@ async function run() {
       };
     }
 
-    // price range
     if (minPrice || maxPrice) {
       query.hourlyRate = {};
       if (minPrice) query.hourlyRate.$gte = Number(minPrice);
       if (maxPrice) query.hourlyRate.$lte = Number(maxPrice);
     }
 
-    // floor filter
     if (floor) {
-  query.floor = { $eq: floor.toString() };
-}
+      query.floor = { $eq: floor.toString() };
+    }
 
     const result = await roomsCollection.find(query).toArray();
     res.send(result);
@@ -218,7 +206,7 @@ async function run() {
     res.send(result);
   });
 
-  // create booking
+  // create booking (7.3)
   app.post("/bookings", verifyToken, async (req, res) => {
     const booking = req.body;
 
@@ -228,12 +216,15 @@ async function run() {
     const conflict = await bookingsCollection.findOne({
       roomId: booking.roomId,
       date: booking.date,
-      startTime: booking.startTime,
       status: "confirmed",
+      $and: [
+        { startTime: { $lte: booking.endTime } },
+        { endTime: { $gte: booking.startTime } },
+      ],
     });
 
     if (conflict) {
-      return res.status(400).send("Time slot already booked");
+      return res.status(400).send("This time overlaps with another booking");
     }
 
     const result = await bookingsCollection.insertOne(booking);

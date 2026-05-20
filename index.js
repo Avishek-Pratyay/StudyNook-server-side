@@ -44,70 +44,51 @@ async function run() {
   await client.connect();
 
   const db = client.db("studynookDB");
-
   const roomsCollection = db.collection("rooms");
   const usersCollection = db.collection("users");
   const bookingsCollection = db.collection("bookings");
-
-  console.log("MongoDB connected");
 
   app.get("/", (req, res) => {
     res.send("StudyNook API Running");
   });
 
-  // USERS
   app.post("/users", async (req, res) => {
     const user = req.body;
 
-    const exists = await usersCollection.findOne({
-      email: user.email,
-    });
-
+    const exists = await usersCollection.findOne({ email: user.email });
     if (exists) return res.send(exists);
 
     const result = await usersCollection.insertOne(user);
     res.send(result);
   });
 
-  // JWT
   app.post("/jwt", async (req, res) => {
-    const user = req.body;
-
     const token = jwt.sign(
-      { email: user.email },
+      { email: req.body.email },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    res
-      .cookie("token", token, {
-        httpOnly: true,
-        secure: false,
-      })
-      .send({ success: true });
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: false,
+    }).send({ success: true });
   });
 
-  // LOGOUT
   app.post("/logout", (req, res) => {
     res.clearCookie("token").send({ success: true });
   });
 
-  // ALL ROOMS
   app.get("/rooms", async (req, res) => {
     const search = req.query.search || "";
 
-    const query = {
-      roomName: {
-        $regex: search,
-        $options: "i",
-      },
-    };
+    const result = await roomsCollection.find({
+      roomName: { $regex: search, $options: "i" },
+    }).toArray();
 
-    const result = await roomsCollection.find(query).toArray();
     res.send(result);
   });
 
-  // LATEST 6
   app.get("/rooms/latest", async (req, res) => {
     const result = await roomsCollection
       .find()
@@ -118,7 +99,6 @@ async function run() {
     res.send(result);
   });
 
-  // SINGLE ROOM
   app.get("/rooms/:id", async (req, res) => {
     const result = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
@@ -127,25 +107,15 @@ async function run() {
     res.send(result);
   });
 
-  // BOOKING COUNT
-  app.get("/rooms/:id/booking-count", async (req, res) => {
-    const count = await bookingsCollection.countDocuments({
-      roomId: req.params.id,
-    });
-
-    res.send({ count });
-  });
-
-  // ADD ROOM
   app.post("/rooms", verifyToken, async (req, res) => {
     const room = req.body;
     room.ownerEmail = req.user.email;
+    room.bookingCount = 0;
 
     const result = await roomsCollection.insertOne(room);
     res.send(result);
   });
 
-  // MY LISTINGS
   app.get("/my-listings", verifyToken, async (req, res) => {
     const result = await roomsCollection
       .find({ ownerEmail: req.user.email })
@@ -154,18 +124,13 @@ async function run() {
     res.send(result);
   });
 
-  // UPDATE ROOM OWNER CHECK
   app.patch("/rooms/:id", verifyToken, async (req, res) => {
     const room = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
     });
 
-    if (!room) {
-      return res.status(404).send({ message: "Room not found" });
-    }
-
     if (room.ownerEmail !== req.user.email) {
-      return res.status(403).send({ message: "Forbidden" });
+      return res.status(403).send("Forbidden");
     }
 
     const result = await roomsCollection.updateOne(
@@ -176,18 +141,13 @@ async function run() {
     res.send(result);
   });
 
-  // DELETE ROOM OWNER CHECK
   app.delete("/rooms/:id", verifyToken, async (req, res) => {
     const room = await roomsCollection.findOne({
       _id: new ObjectId(req.params.id),
     });
 
-    if (!room) {
-      return res.status(404).send({ message: "Room not found" });
-    }
-
     if (room.ownerEmail !== req.user.email) {
-      return res.status(403).send({ message: "Forbidden" });
+      return res.status(403).send("Forbidden");
     }
 
     await bookingsCollection.deleteMany({
@@ -201,16 +161,32 @@ async function run() {
     res.send(result);
   });
 
-  // BOOK ROOM
   app.post("/bookings", verifyToken, async (req, res) => {
     const booking = req.body;
     booking.userEmail = req.user.email;
+    booking.status = "confirmed";
+
+    const conflict = await bookingsCollection.findOne({
+      roomId: booking.roomId,
+      date: booking.date,
+      startTime: booking.startTime,
+      status: "confirmed",
+    });
+
+    if (conflict) {
+      return res.status(400).send("Time slot already booked");
+    }
 
     const result = await bookingsCollection.insertOne(booking);
+
+    await roomsCollection.updateOne(
+      { _id: new ObjectId(booking.roomId) },
+      { $inc: { bookingCount: 1 } }
+    );
+
     res.send(result);
   });
 
-  // MY BOOKINGS
   app.get("/bookings", verifyToken, async (req, res) => {
     const result = await bookingsCollection
       .find({ userEmail: req.user.email })
@@ -219,13 +195,21 @@ async function run() {
     res.send(result);
   });
 
-  // CANCEL
-  app.delete("/bookings/:id", verifyToken, async (req, res) => {
-    const result = await bookingsCollection.deleteOne({
+  app.patch("/bookings/:id/cancel", verifyToken, async (req, res) => {
+    const booking = await bookingsCollection.findOne({
       _id: new ObjectId(req.params.id),
     });
 
-    res.send(result);
+    if (booking.userEmail !== req.user.email) {
+      return res.status(403).send("Forbidden");
+    }
+
+    await bookingsCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { status: "cancelled" } }
+    );
+
+    res.send({ success: true });
   });
 }
 
